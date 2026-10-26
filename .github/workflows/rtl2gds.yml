@@ -1,0 +1,104 @@
+# =====================================================================
+#  EEE703128 - RTL-to-GDSII trên GitHub Actions (Cổng A)
+# =====================================================================
+name: RTL to GDSII
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # ---- SỬA BA DÒNG NÀY CHO KHỚP ĐỀ CỦA BẠN -----------------------
+  MA_DE: B06
+  DESIGN_NAME: b06_hamming74_encoder
+  CONFIG: config.json
+  # -----------------------------------------------------------------
+
+jobs:
+  mo-phong:
+    name: 1 - Mô phỏng RTL (Icarus Verilog)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cài Icarus Verilog
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y iverilog
+
+      - name: Ghi lại phiên bản công cụ
+        run: |
+          iverilog -V | head -1 | tee tool_versions.txt
+          echo "Ngày chạy: $(date -Is)" | tee -a tool_versions.txt
+
+      - name: Biên dịch và chạy testbench
+        run: |
+          iverilog -g2012 -o sim.vvp rtl/*.sv tb/*.sv
+          vvp sim.vvp | tee simulation.log
+
+      - name: Kiểm tra log - phải có PASS và không được có lỗi
+        run: |
+          if grep -qiE "FATAL|mismatch|\bFAIL\b" simulation.log; then
+            echo "::error::Testbench báo lỗi - xem simulation.log"
+            exit 1
+          fi
+          if ! grep -qi "PASS" simulation.log; then
+            echo "::error::Không thấy dòng PASS nào trong log"
+            exit 1
+          fi
+          echo "Mô phỏng đạt."
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mo-phong-${{ env.MA_DE }}
+          path: |
+            simulation.log
+            tool_versions.txt
+            *.vcd
+          if-no-files-found: warn
+
+  rtl2gds:
+    name: 2 - RTL-to-GDSII (LibreLane + sky130A)
+    runs-on: ubuntu-latest
+    needs: mo-phong
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cài Nix kèm bộ nhớ đệm nhị phân của FOSSi
+        uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            extra-substituters = https://nix-cache.fossi-foundation.org
+            extra-trusted-public-keys = nix-cache.fossi-foundation.org:3+K59iFwXqKsL7BNu6Guy0v+uTlwsxYQxjspXzqLYQs=
+            extra-experimental-features = nix-command flakes
+
+      - name: Lấy LibreLane
+        run: git clone --depth 1 https://github.com/librelane/librelane ~/librelane
+
+      - name: Chạy flow
+        run: |
+          cd ~/librelane
+          nix-shell --run "cd '$GITHUB_WORKSPACE' && librelane --version && librelane '$CONFIG'"
+
+      - name: Kiểm tra sản phẩm
+        run: |
+          GDS=$(find . -name "*.gds" | head -1)
+          MJ=$(find . -name "metrics.json" | head -1)
+          if [ -z "$GDS" ]; then echo "::error::Không sinh được file GDS"; exit 1; fi
+          if [ -z "$MJ" ];  then echo "::error::Không có metrics.json";   exit 1; fi
+          echo "GDS: $GDS"
+          echo "--- Chỉ số chính ---"
+          python3 .github/doc_metrics.py "$MJ"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rtl2gds-${{ env.MA_DE }}
+          path: |
+            **/runs/**/final/**
+            **/runs/**/*.log
+            **/metrics.json
+            **/*.gds
+          if-no-files-found: warn
