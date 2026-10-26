@@ -2,6 +2,9 @@
   "DESIGN_NAME": "b06_hamming74_encoder",
   "VERILOG_FILES": "dir::rtl/*.sv",
   "CLOCK_PERIOD": 10.0,
-  "FP_CORE_UTIL": 30,
-  "PL_TARGET_DENSITY_PCT": 45
+  "FP_CORE_UTIL": 20,
+  "PL_TARGET_DENSITY_PCT": 35,
+  "FP_SIZING": "absolute",
+  "DIE_AREA": "0 0 100 100",
+  "SDC_FILE": "04_IMPLEMENTATION/constraints/design.sdc"
 }
