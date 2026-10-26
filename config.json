@@ -2,5 +2,6 @@
   "DESIGN_NAME": "b06_hamming74_encoder",
   "VERILOG_FILES": "dir::rtl/*.sv",
   "CLOCK_PERIOD": 10.0,
-  "FP_CORE_UTIL": 40
+  "FP_CORE_UTIL": 30,
+  "PL_TARGET_DENSITY_PCT": 45
 }
