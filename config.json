@@ -6,5 +6,5 @@
   "PL_TARGET_DENSITY_PCT": 35,
   "FP_SIZING": "absolute",
   "DIE_AREA": "0 0 100 100",
-  "SDC_FILE": "04_IMPLEMENTATION/constraints/design.sdc"
+  "FALLBACK_SDC": "design.sdc"
 }
