@@ -32,7 +32,7 @@ jobs:
 
       - name: Biên dịch và chạy testbench
         run: |
-          iverilog -g2012 -o sim.vvp src/*.sv test/*.sv
+          iverilog -g2012 -o sim.vvp src/project.v test/b06_reference.sv test/tb.v
           vvp sim.vvp | tee simulation.log
 
       - name: Kiểm tra log - phải có PASS và không được có lỗi
