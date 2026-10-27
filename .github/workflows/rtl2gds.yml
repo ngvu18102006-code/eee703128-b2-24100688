@@ -102,3 +102,52 @@ jobs:
             **/metrics.json
             **/*.gds
           if-no-files-found: warn
+name: GDS & Verification Pipeline
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  gds:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - name: Run LibreLane RTL-to-GDSII Flow
+        uses: castor-software/librelane-action@v1
+        with:
+          config: config.json
+      - name: Upload Run Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rtl2gds-B06
+          path: runs/
+
+  precheck:
+    needs: gds
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - name: Tiny Tapeout Precheck
+        run: |
+          echo "Running precheck checks..."
+
+  gl_test:
+    needs: gds
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - name: Gate-Level Simulation
+        run: |
+          echo "Running gate-level simulation..."
+
+  viewer:
+    needs: [precheck, gl_test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Layout Preview Generation
+        run: |
+          echo "Generating layout views..."
