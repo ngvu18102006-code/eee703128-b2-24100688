@@ -276,12 +276,21 @@ jobs:
           test -s gds_render.png
           file gds_render.png
 
+      - name: Preserve submission directory and upload
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifact_bundle/tt_submission
+          cp tt_submission/* artifact_bundle/tt_submission/
+          find artifact_bundle -maxdepth 3 -type f -print
+
       - name: Upload Tiny Tapeout submission
         uses: actions/upload-artifact@v4
         with:
           name: tt_submission
-          path: tt_submission/
+          path: artifact_bundle/**
           if-no-files-found: error
+
 
       - name: Upload rendered layout image
         uses: actions/upload-artifact@v4
