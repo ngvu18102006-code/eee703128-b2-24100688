@@ -311,8 +311,9 @@ jobs:
       - name: Run official Tiny Tapeout precheck
         uses: TinyTapeout/tt-gds-action/precheck@ttsky25b
 
+  
   gl_test:
-    name: 4 - Official Gate-Level Simulation
+    name: 4 - Gate-Level Simulation
     needs: package_gds
     runs-on: ubuntu-latest
 
@@ -320,10 +321,37 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Run official Tiny Tapeout gate-level test
-        uses: TinyTapeout/tt-gds-action/gl_test@ttsky25b
+      - name: Download Tiny Tapeout submission
+        uses: actions/download-artifact@v4
         with:
-          test-dir: test
+          name: tt_submission
+          path: .
+
+      - name: Verify test setup
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -la test
+          test -f test/Makefile
+          test -f test/tb.v
+          test -f test/test.py
+          find tt_submission -maxdepth 1 -type f -print
+          cp tt_submission/*.v test/gate_level_netlist.v
+
+      - name: Install Cocotb and Icarus Verilog
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y iverilog
+          python3 -m pip install --user 'cocotb<2'
+
+      - name: Run gate-level simulation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd test
+          make clean
+          GATES=yes make
+
 
   viewer:
     name: 5 - Official Tiny Tapeout 3D Viewer
