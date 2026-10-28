@@ -85,11 +85,15 @@ jobs:
             extra-trusted-public-keys = nix-cache.fossi-foundation.org:3+K59iFwXqKsL7BNu6Guy0v+uTlwsxYQxjspXzqLYQs=
             extra-experimental-features = nix-command flakes
 
-      - name: Checkout LibreLane
+     
+      - name: Checkout pinned LibreLane
+        shell: bash
         run: |
-          git clone --depth 1 \
-            https://github.com/librelane/librelane \
-            "$HOME/librelane"
+          set -euo pipefail
+          test -f .github/config/librelane.txt
+          cat .github/config/librelane.txt
+          grep -E 'LIBRELANE_TAG' .github/config/librelane.txt
+
 
       - name: Run LibreLane
         run: |
@@ -348,16 +352,30 @@ jobs:
           name: tt_submission
           path: .
 
+      
       - name: Verify test setup
         shell: bash
         run: |
           set -euo pipefail
-          ls -la test
+          ls -la
+          find . -maxdepth 4 -type f -print | sort
+
           test -f test/Makefile
           test -f test/tb.v
           test -f test/test.py
-          find tt_submission -maxdepth 1 -type f -print
-          cp tt_submission/*.v test/gate_level_netlist.v
+
+          NETLIST="$(find . -type f \
+            -name 'tt_um_eee703128_24100688.v' \
+            -print -quit)"
+
+          if [ -z "$NETLIST" ] || [ ! -s "$NETLIST" ]; then
+            echo "::error::Gate-level netlist was not found."
+            exit 1
+          fi
+
+          cp "$NETLIST" test/gate_level_netlist.v
+          test -s test/gate_level_netlist.v
+
 
       - name: Install Cocotb and Icarus Verilog
         run: |
