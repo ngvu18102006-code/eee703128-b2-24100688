@@ -32,7 +32,7 @@ jobs:
 
       - name: Biên dịch và chạy testbench
         run: |
-          iverilog -g2012 -o sim.vvp src/project.v test/b06_reference.sv test/tb.v
+          iverilog -g2012 -o sim.vvp src/project.v test/b06_reference.sv test/tb_rtl.v
           vvp sim.vvp | tee simulation.log
 
       - name: Kiểm tra log - phải có PASS và không được có lỗi
@@ -101,70 +101,115 @@ jobs:
             **/*.gds
           if-no-files-found: warn
 
-  precheck:
-    name: 3 - Tiny Tapeout Precheck
+  package_gds:
+    name: Package GDS and gate-level netlist
     needs: rtl2gds
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-      - name: Run Precheck Validations
-        run: |
-          echo "Running precheck checks successfully..."
-
-  gl_test:
-    name: 4 - Gate-Level Simulation
-    needs: rtl2gds
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-      - name: Run GL Simulation
-        run: |
-          echo "Gate-level netlist simulation completed."
-
-  viewer:
-    name: 5 - Layout Viewer Preview
-    needs: [precheck, gl_test]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Download GDS Artifacts
+      - name: Download RTL-to-GDS artifact
         uses: actions/download-artifact@v4
         with:
           name: rtl2gds-${{ env.MA_DE }}
           path: output_gds
 
-      - name: Setup Layout Viewer / Summary Page
+      - name: Prepare Tiny Tapeout submission
+        shell: bash
         run: |
-          mkdir -p viewer_html
-          echo '<!DOCTYPE html>
-          <html>
-          <head>
-              <title>Chip Layout Viewer - B06</title>
-              <style>
-                  body { font-family: Arial, sans-serif; background: #0d1117; color: #c9d1d9; text-align: center; padding: 20px; }
-                  .container { max-width: 900px; margin: auto; background: #161b22; padding: 20px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
-                  h2 { color: #58a6ff; }
-                  .viewer-box { border: 2px dashed #30363d; padding: 20px; margin-top: 20px; border-radius: 6px; }
-              </style>
-          </head>
-          <body>
-              <div class="container">
-                  <h2>B06 - Hamming (7,4) Encoder Layout Summary</h2>
-                  <p>Trạng thái: Thiết kế vật lý thành công qua LibreLane & OpenROAD.</p>
-                  <div class="viewer-box">
-                      <h3>2D Preview & 3D Viewer</h3>
-                      <p>File GDSII đã được tổng hợp và kiểm tra DRC/LVS thành công.</p>
-                  </div>
-              </div>
-          </body>
-          </html>' > viewer_html/index.html
+          set -euo pipefail
+          GDS="$(find output_gds -type f -path '*/final/gds/tt_um_eee703128_24100688.gds' -print -quit)"
+          PNL="$(find output_gds -type f -path '*/final/pnl/tt_um_eee703128_24100688.pnl.v' -print -quit)"
+          if [ -z "$GDS" ] || [ -z "$PNL" ]; then
+            echo "::error::Không tìm thấy GDS cuối cùng hoặc PNL netlist."
+            find output_gds -type f \( -name '*.gds' -o -name '*.pnl.v' \) -print
+            exit 1
+          fi
+          mkdir -p tt_submission
+          cp "$GDS" tt_submission/tt_um_eee703128_24100688.gds
+          cp "$PNL" tt_submission/tt_um_eee703128_24100688.v
+          echo "B06 final GDS artifact" > viewer-artifact-root.txt
+          ls -lh tt_submission/
 
-      - name: Upload Viewer Summary Artifact
+      - name: Install KLayout
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y klayout
+          klayout -v
+
+      - name: Render PNG from the real GDS
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/render_klayout.rb <<'RUBY'
+          gds = ENV.fetch("GDS")
+          png = ENV.fetch("PNG")
+          layout = RBA::Layout.new
+          layout.read(gds)
+          view = RBA::LayoutView.new
+          view.load_layout(gds, 0)
+          view.max_hier
+          view.zoom_fit
+          view.save_image(png, 1200, 900)
+          puts "Rendered #{png}; cells=#{layout.cells.size}"
+          RUBY
+          GDS="$GITHUB_WORKSPACE/tt_submission/tt_um_eee703128_24100688.gds" \
+          PNG="$GITHUB_WORKSPACE/gds_render.png" \
+            klayout -b -r /tmp/render_klayout.rb
+          file gds_render.png
+          test -s gds_render.png
+
+      - name: Upload submission for official checks and viewer
         uses: actions/upload-artifact@v4
         with:
-          name: viewer-summary
-          path: viewer_html/
+          name: tt_submission
+          path: |
+            tt_submission/*.gds
+            tt_submission/*.v
+            viewer-artifact-root.txt
+          if-no-files-found: error
+
+      - name: Upload rendered layout image
+        uses: actions/upload-artifact@v4
+        with:
+          name: gds_render
+          path: gds_render.png
+          if-no-files-found: error
+
+  precheck:
+    name: 3 - Official Tiny Tapeout Precheck
+    needs: package_gds
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run official Tiny Tapeout precheck
+        uses: TinyTapeout/tt-gds-action/precheck@b4ed4cf85a92075809d998d04c275ec00e64c8c8
+        with:
+          pdk: sky130
+          tools-ref: ttsky25b
+
+  gl_test:
+    name: 4 - Official Gate-Level Simulation
+    needs: package_gds
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run official Tiny Tapeout gate-level test
+        uses: TinyTapeout/tt-gds-action/gl_test@b4ed4cf85a92075809d998d04c275ec00e64c8c8
+        with:
+          pdk: sky130
+
+  viewer:
+    name: 5 - Real Tiny Tapeout Layout Viewer
+    if: github.event_name != 'pull_request'
+    needs: [precheck, gl_test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    steps:
+      - name: Deploy actual Tiny Tapeout Viewer
+        uses: TinyTapeout/tt-gds-action/viewer@b4ed4cf85a92075809d998d04c275ec00e64c8c8
+        with:
+          pdk: sky130
