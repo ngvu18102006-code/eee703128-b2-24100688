@@ -97,7 +97,28 @@ jobs:
           cd "$HOME/librelane"
           nix-shell --run \
             "cd '$GITHUB_WORKSPACE' && librelane --version && librelane '$CONFIG'"
+      - name: Record LibreLane version and pin layers
+        shell: bash
+        run: |
+          set -euo pipefail
 
+          echo "=== LibreLane version ==="
+          cd "$HOME/librelane"
+          git rev-parse HEAD
+          cd "$GITHUB_WORKSPACE"
+
+          echo "=== LEF pin layers ==="
+          LEF="$(find "$GITHUB_WORKSPACE" "$HOME/artifacts" \
+            -type f \
+            -path '*/final/lef/tt_um_eee703128_24100688.lef' \
+            -print -quit 2>/dev/null || true)"
+
+          if [ -n "$LEF" ]; then
+            grep -n -E 'LAYER met[1-5]|PIN VGND|PIN VDPWR|SIZE ' "$LEF" \
+              | head -100
+          else
+            echo "LEF not found"
+          fi
       - name: Verify and normalize physical-design outputs
         shell: bash
         run: |
