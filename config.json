@@ -1,3 +1,4 @@
+
 {
   "DESIGN_NAME": "tt_um_eee703128_24100688",
   "VERILOG_FILES": "dir::src/project.v",
@@ -7,5 +8,6 @@
   "FP_SIZING": "absolute",
   "DIE_AREA": "0 0 161 111.52",
   "RT_MAX_LAYER": "met4",
+  "MAGIC_WRITE_LEF_PINONLY": true,
   "FALLBACK_SDC": "design.sdc"
 }
