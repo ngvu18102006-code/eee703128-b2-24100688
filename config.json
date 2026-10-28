@@ -1,5 +1,5 @@
 {
-  "DESIGN_NAME": "b06_hamming74_encoder",
+  "DESIGN_NAME": "tt_um_eee703128_24100688",
   "VERILOG_FILES": "dir::src/project.v",
   "CLOCK_PERIOD": 10.0,
   "FP_CORE_UTIL": 20,
