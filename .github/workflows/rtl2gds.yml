@@ -1,6 +1,9 @@
+
 # =====================================================================
-#  EEE703128 - RTL-to-GDSII trên GitHub Actions (Cổng A) - Full Pipeline
+# EEE703128 - Hamming (7,4) Encoder
+# RTL -> LibreLane -> Tiny Tapeout Precheck -> Gate-Level Test -> Viewer
 # =====================================================================
+
 name: RTL to GDSII & Verification Pipeline
 
 on:
@@ -15,40 +18,48 @@ env:
 
 jobs:
   mo-phong:
-    name: 1 - Mô phỏng RTL (Icarus Verilog)
+    name: 1 - RTL Simulation (Icarus Verilog)
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - name: Cài Icarus Verilog
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Icarus Verilog
         run: |
           sudo apt-get update
           sudo apt-get install -y iverilog
 
-      - name: Ghi lại phiên bản công cụ
+      - name: Record tool versions
         run: |
-          iverilog -V | head -1 | tee tool_versions.txt
-          echo "Ngày chạy: $(date -Is)" | tee -a tool_versions.txt
+          iverilog -V 2>&1 | head -1 | tee tool_versions.txt
+          echo "Run time: $(date -Is)" | tee -a tool_versions.txt
 
-      - name: Biên dịch và chạy testbench
+      - name: Compile and run RTL testbench
         run: |
-          iverilog -g2012 -o sim.vvp src/project.v test/b06_reference.sv test/tb.v
+          set -euo pipefail
+          iverilog -g2012 -o sim.vvp \
+            src/project.v \
+            test/b06_reference.sv \
+            test/tb.v
           vvp sim.vvp | tee simulation.log
 
-      - name: Kiểm tra log - phải có PASS và không được có lỗi
+      - name: Verify RTL simulation result
         run: |
-          if grep -qiE "FATAL|mismatch|\bFAIL\b" simulation.log; then
-            echo "::error::Testbench báo lỗi - xem simulation.log"
+          set -euo pipefail
+          if grep -qiE 'FATAL|mismatch|FAIL' simulation.log; then
+            echo "::error::RTL simulation reported a failure."
             exit 1
           fi
-          if ! grep -qi "PASS" simulation.log; then
-            echo "::error::Không thấy dòng PASS nào trong log"
+          if ! grep -qi 'PASS' simulation.log; then
+            echo "::error::No PASS marker found in simulation.log."
             exit 1
           fi
-          echo "Mô phỏng đạt."
+          echo "RTL simulation passed."
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload RTL simulation logs
         if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: mo-phong-${{ env.MA_DE }}
           path: |
@@ -58,13 +69,15 @@ jobs:
           if-no-files-found: warn
 
   rtl2gds:
-    name: 2 - RTL-to-GDSII (LibreLane + sky130A)
+    name: 2 - RTL-to-GDSII (LibreLane + Sky130A)
     runs-on: ubuntu-latest
     needs: mo-phong
-    steps:
-      - uses: actions/checkout@v4
 
-      - name: Cài Nix kèm bộ nhớ đệm nhị phân của FOSSi
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Nix with FOSSi binary cache
         uses: cachix/install-nix-action@v27
         with:
           extra_nix_config: |
@@ -72,99 +85,251 @@ jobs:
             extra-trusted-public-keys = nix-cache.fossi-foundation.org:3+K59iFwXqKsL7BNu6Guy0v+uTlwsxYQxjspXzqLYQs=
             extra-experimental-features = nix-command flakes
 
-      - name: Lấy LibreLane
-        run: git clone --depth 1 https://github.com/librelane/librelane ~/librelane
-
-      - name: Chạy flow
+      - name: Checkout LibreLane
         run: |
-          cd ~/librelane
-          nix-shell --run "cd '$GITHUB_WORKSPACE' && librelane --version && librelane '$CONFIG'"
+          git clone --depth 1 \
+            https://github.com/librelane/librelane \
+            "$HOME/librelane"
 
-      - name: Kiểm tra sản phẩm
+      - name: Run LibreLane
         run: |
-          GDS=$(find . -name "*.gds" | head -1)
-          MJ=$(find . -name "metrics.json" | head -1)
-          if [ -z "$GDS" ]; then echo "::error::Không sinh được file GDS"; exit 1; fi
-          if [ -z "$MJ" ];  then echo "::error::Không có metrics.json";    exit 1; fi
-          echo "GDS: $GDS"
-          echo "--- Chỉ số chính ---"
-          python3 .github/doc_metrics.py "$MJ"
+          set -euo pipefail
+          cd "$HOME/librelane"
+          nix-shell --run \
+            "cd '$GITHUB_WORKSPACE' && librelane --version && librelane '$CONFIG'"
 
-      - uses: actions/upload-artifact@v4
-        if: always()
+      - name: Verify and normalize physical-design outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          GDS="$(find "$GITHUB_WORKSPACE" "$HOME/artifacts" \
+            -type f \
+            -path '*/final/gds/tt_um_eee703128_24100688.gds' \
+            -print -quit 2>/dev/null || true)"
+
+          if [ -z "$GDS" ]; then
+            echo "::error::Final GDS was not found."
+            exit 1
+          fi
+
+          RUN_ROOT="${GDS%/final/gds/*}"
+          FINAL_DIR="$RUN_ROOT/final"
+
+          PNL="$FINAL_DIR/pnl/tt_um_eee703128_24100688.pnl.v"
+          LEF="$FINAL_DIR/lef/tt_um_eee703128_24100688.lef"
+          METRICS="$FINAL_DIR/metrics.json"
+
+          for f in "$PNL" "$LEF" "$METRICS"; do
+            if [ ! -s "$f" ]; then
+              echo "::error::Required output missing: $f"
+              exit 1
+            fi
+          done
+
+          echo "Found GDS: $GDS"
+          echo "Found netlist: $PNL"
+          echo "Found LEF: $LEF"
+          echo "Found metrics: $METRICS"
+
+          python3 .github/doc_metrics.py "$METRICS"
+
+          mkdir -p flow_artifacts/final/gds
+          mkdir -p flow_artifacts/final/pnl
+          mkdir -p flow_artifacts/final/lef
+          mkdir -p flow_artifacts/final
+
+          cp "$GDS" \
+            flow_artifacts/final/gds/tt_um_eee703128_24100688.gds
+          cp "$PNL" \
+            flow_artifacts/final/pnl/tt_um_eee703128_24100688.pnl.v
+          cp "$LEF" \
+            flow_artifacts/final/lef/tt_um_eee703128_24100688.lef
+          cp "$METRICS" flow_artifacts/final/metrics.json
+
+          find "$RUN_ROOT" -type f -name '*.log' -exec \
+            cp --parents '{}' flow_artifacts/ \; || true
+
+          echo "Physical-design outputs prepared."
+
+      - name: Upload normalized physical-design outputs
+        uses: actions/upload-artifact@v4
         with:
           name: rtl2gds-${{ env.MA_DE }}
-          path: |
-            **/runs/**/final/**
-            **/runs/**/*.log
-            **/metrics.json
-            **/*.gds
-          if-no-files-found: warn
+          path: flow_artifacts/
+          if-no-files-found: error
 
-  precheck:
-    name: 3 - Tiny Tapeout Precheck
+  package_gds:
+    name: Package Tiny Tapeout submission
     needs: rtl2gds
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-      - name: Run Precheck Validations
-        run: |
-          echo "Running precheck checks successfully..."
 
-  gl_test:
-    name: 4 - Gate-Level Simulation
-    needs: rtl2gds
-    runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-      - name: Run GL Simulation
-        run: |
-          echo "Gate-level netlist simulation completed."
-
-  viewer:
-    name: 5 - Layout Viewer Preview
-    needs: [precheck, gl_test]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download GDS Artifacts
+      - name: Download physical-design outputs
         uses: actions/download-artifact@v4
         with:
           name: rtl2gds-${{ env.MA_DE }}
           path: output_gds
 
-      - name: Setup Layout Viewer / Summary Page
+      - name: Install KLayout
         run: |
-          mkdir -p viewer_html
-          echo '<!DOCTYPE html>
-          <html>
-          <head>
-              <title>Chip Layout Viewer - B06</title>
-              <style>
-                  body { font-family: Arial, sans-serif; background: #0d1117; color: #c9d1d9; text-align: center; padding: 20px; }
-                  .container { max-width: 900px; margin: auto; background: #161b22; padding: 20px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
-                  h2 { color: #58a6ff; }
-                  .viewer-box { border: 2px dashed #30363d; padding: 20px; margin-top: 20px; border-radius: 6px; }
-              </style>
-          </head>
-          <body>
-              <div class="container">
-                  <h2>B06 - Hamming (7,4) Encoder Layout Summary</h2>
-                  <p>Trạng thái: Thiết kế vật lý thành công qua LibreLane & OpenROAD.</p>
-                  <div class="viewer-box">
-                      <h3>2D Preview & 3D Viewer</h3>
-                      <p>File GDSII đã được tổng hợp và kiểm tra DRC/LVS thành công.</p>
-                  </div>
-              </div>
-          </body>
-          </html>' > viewer_html/index.html
+          sudo apt-get update
+          sudo apt-get install -y klayout
+          klayout -v
 
-      - name: Upload Viewer Summary Artifact
+      - name: Prepare submission and convert GDS to OASIS
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          GDS="$(find output_gds -type f \
+            -path '*/final/gds/tt_um_eee703128_24100688.gds' \
+            -print -quit)"
+          PNL="$(find output_gds -type f \
+            -path '*/final/pnl/tt_um_eee703128_24100688.pnl.v' \
+            -print -quit)"
+          LEF="$(find output_gds -type f \
+            -path '*/final/lef/tt_um_eee703128_24100688.lef' \
+            -print -quit)"
+
+          for f in "$GDS" "$PNL" "$LEF"; do
+            if [ -z "$f" ] || [ ! -s "$f" ]; then
+              echo "::error::Missing GDS, gate-level netlist, or LEF."
+              find output_gds -type f -print
+              exit 1
+            fi
+          done
+
+          mkdir -p tt_submission
+
+          cp "$GDS" tt_submission/tt_um_eee703128_24100688.gds
+          cp "$PNL" tt_submission/tt_um_eee703128_24100688.v
+          cp "$LEF" tt_submission/tt_um_eee703128_24100688.lef
+
+          # PDK metadata consumed by the official Tiny Tapeout actions.
+          cat > tt_submission/pdk.json <<'JSON'
+          {
+            "PDK": "sky130A",
+            "PDK_SOURCE": "open_pdks",
+            "PDK_VERSION": "0536d02d875c8f67dd7cca3902ac457e62f20005"
+          }
+          JSON
+
+          # Minimal project metadata for this submission.
+          cat > tt_submission/info.yaml <<'YAML'
+          project:
+            top_module: tt_um_eee703128_24100688
+            tiles: "1x1"
+            analog_pins: 0
+          pinout: {}
+          YAML
+
+          cat > /tmp/gds_to_oas.rb <<'RUBY'
+          input = ENV.fetch("INPUT_GDS")
+          output = ENV.fetch("OUTPUT_OAS")
+
+          layout = RBA::Layout.new
+          layout.read(input)
+          layout.write(output)
+
+          puts "Cells: #{layout.cells.size}"
+          puts "OASIS created: #{output}"
+          RUBY
+
+          export INPUT_GDS="$GITHUB_WORKSPACE/tt_submission/tt_um_eee703128_24100688.gds"
+          export OUTPUT_OAS="$GITHUB_WORKSPACE/tt_submission/tt_um_eee703128_24100688.oas"
+
+          klayout -b -r /tmp/gds_to_oas.rb
+          test -s "$OUTPUT_OAS"
+
+          echo "Submission files:"
+          ls -lh tt_submission/
+
+      - name: Render PNG preview from actual GDS
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > /tmp/render_gds.rb <<'RUBY'
+          gds = ENV.fetch("INPUT_GDS")
+          png = ENV.fetch("OUTPUT_PNG")
+
+          layout = RBA::Layout.new
+          layout.read(gds)
+
+          view = RBA::LayoutView.new
+          view.load_layout(gds, 0)
+          view.max_hier
+          view.zoom_fit
+          view.save_image(png, 1200, 900)
+
+          puts "Rendered #{png}; cells=#{layout.cells.size}"
+          RUBY
+
+          export INPUT_GDS="$GITHUB_WORKSPACE/tt_submission/tt_um_eee703128_24100688.gds"
+          export OUTPUT_PNG="$GITHUB_WORKSPACE/gds_render.png"
+
+          klayout -b -r /tmp/render_gds.rb
+          test -s gds_render.png
+          file gds_render.png
+
+      - name: Upload Tiny Tapeout submission
         uses: actions/upload-artifact@v4
         with:
-          name: viewer-summary
-          path: viewer_html/
+          name: tt_submission
+          path: tt_submission/
+          if-no-files-found: error
+
+      - name: Upload rendered layout image
+        uses: actions/upload-artifact@v4
+        with:
+          name: gds_render
+          path: gds_render.png
+          if-no-files-found: error
+
+  precheck:
+    name: 3 - Official Tiny Tapeout Precheck
+    needs: package_gds
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run official Tiny Tapeout precheck
+        uses: TinyTapeout/tt-gds-action/precheck@ttsky25b
+
+  gl_test:
+    name: 4 - Official Gate-Level Simulation
+    needs: package_gds
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run official Tiny Tapeout gate-level test
+        uses: TinyTapeout/tt-gds-action/gl_test@ttsky25b
+        with:
+          test-dir: test
+
+  viewer:
+    name: 5 - Official Tiny Tapeout 3D Viewer
+    if: github.event_name != 'pull_request'
+    needs: [precheck, gl_test]
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Deploy official Tiny Tapeout viewer
+        uses: TinyTapeout/tt-gds-action/viewer@ttsky25b
