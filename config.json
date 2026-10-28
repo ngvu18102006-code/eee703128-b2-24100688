@@ -5,6 +5,7 @@
   "FP_CORE_UTIL": 20,
   "PL_TARGET_DENSITY_PCT": 35,
   "FP_SIZING": "absolute",
-  "DIE_AREA": "0 0 100 100",
+  "DIE_AREA": "0 0 161 111.52",
+  "RT_MAX_LAYER": "met4",
   "FALLBACK_SDC": "design.sdc"
 }
