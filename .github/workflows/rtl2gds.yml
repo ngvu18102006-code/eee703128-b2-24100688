@@ -168,4 +168,42 @@ jobs:
             **/runs/**/*.lef
             **/runs/**/*.gds
             **/*.gds
+  gl_test:
+    name: 3 - Gate-Level Simulation
+    runs-on: ubuntu-latest
+    needs: rtl2gds
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cai Icarus Verilog
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y iverilog
+
+      - name: Bien dich gate-level netlist
+        run: |
+          set -eu
+          iverilog -g2012 -s b06_tb \
+            -o gate_test.vvp \
+            test/gate/netlist.v \
+            test/gate/sky130_xor3_model.v \
+            test/b06_reference.sv \
+            test/tb.v
+
+      - name: Chay gate-level test
+        run: |
+          set -eu
+          vvp gate_test.vvp | tee gate_test.log
+          grep -q "B06 exhaustive 16-word Hamming(7,4) encoder validation PASS" gate_test.log
+          grep -q "B06 extended checks CC-08..CC-12 PASS" gate_test.log
+
+      - name: Luu artifact gate-level test
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gl-test-${{ env.MA_DE }}
+          path: |
+            gate_test.log
+            b06_tb.vcd
           if-no-files-found: warn
