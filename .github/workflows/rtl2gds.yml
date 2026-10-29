@@ -207,3 +207,45 @@ jobs:
             gate_test.log
             b06_tb.vcd
           if-no-files-found: warn
+  viewer:
+    name: 4 - KLayout Viewer
+    runs-on: ubuntu-latest
+    needs: gl_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tai artifact RTL-to-GDSII
+        uses: actions/download-artifact@v4
+        with:
+          name: rtl2gds-${{ env.MA_DE }}
+          path: viewer_input
+
+      - name: Kiem tra file GDSII
+        run: |
+          set -eu
+          GDS=$(find viewer_input -type f -name "*.gds" -print -quit)
+
+          if [ -z "$GDS" ]; then
+            echo "::error::Khong tim thay file GDSII trong artifact rtl2gds"
+            exit 1
+          fi
+
+          mkdir -p viewer_output
+          cp "$GDS" viewer_output/b06_layout.gds
+
+          cat > viewer_output/README.txt <<'EOF'
+          B06 - KLayout Viewer
+          1. Download and extract this artifact.
+          2. Open b06_layout.gds using KLayout.
+          3. Use the mouse wheel to zoom and the mouse to pan.
+          EOF
+
+          echo "GDSII ready: viewer_output/b06_layout.gds"
+
+      - name: Luu artifact KLayout Viewer
+        uses: actions/upload-artifact@v4
+        with:
+          name: viewer-${{ env.MA_DE }}
+          path: viewer_output/
+          if-no-files-found: error
