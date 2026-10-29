@@ -85,14 +85,24 @@ jobs:
             extra-trusted-public-keys = nix-cache.fossi-foundation.org:3+K59iFwXqKsL7BNu6Guy0v+uTlwsxYQxjspXzqLYQs=
             extra-experimental-features = nix-command flakes
 
-     
-      - name: Checkout pinned LibreLane
+    
+      - name: Inspect LibreLane version configuration
         shell: bash
         run: |
-          set -euo pipefail
-          test -f .github/config/librelane.txt
-          cat .github/config/librelane.txt
-          grep -E 'LIBRELANE_TAG' .github/config/librelane.txt
+          set -u
+
+          echo "=== Repository root ==="
+          pwd
+
+          echo "=== Candidate LibreLane config files ==="
+          find .github -maxdepth 4 -type f \
+            \( -iname '*librelane*' -o -iname '*libre*lane*' \) \
+            -print 2>/dev/null || true
+
+          echo "=== Version references ==="
+          grep -RniE 'LIBRELANE_TAG|librelane' \
+            .github/config .github/workflows \
+            2>/dev/null || true
 
 
       - name: Run LibreLane
