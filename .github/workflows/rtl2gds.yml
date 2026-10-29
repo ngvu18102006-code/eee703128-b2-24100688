@@ -44,7 +44,7 @@ jobs:
           iverilog -g2012 -o sim.vvp \
             src/project.v \
             test/b06_reference.sv \
-            test/tb.v
+            test/tb_rtl.v
           vvp sim.vvp | tee simulation.log
 
       - name: Verify RTL simulation result
@@ -106,7 +106,7 @@ jobs:
         uses: TinyTapeout/tt-gds-action/precheck@ttsky25b
 
   gl_test:
-    name: 4 - Gate-Level Simulation
+    name: 4 - Official Gate-Level Simulation
     runs-on: ubuntu-24.04
     needs: gds
 
@@ -116,11 +116,11 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Run official gate-level test
+      - name: Run official Tiny Tapeout gate-level test
         uses: TinyTapeout/tt-gds-action/gl_test@ttsky25b
 
   viewer:
-    name: 5 - Official Tiny Tapeout 3D Viewer
+    name: 5 - Official Tiny Tapeout Viewer
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     needs: [precheck, gl_test]
