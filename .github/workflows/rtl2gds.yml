@@ -1,7 +1,6 @@
-
 # =====================================================================
 # EEE703128 - Hamming (7,4) Encoder
-# RTL -> LibreLane -> Tiny Tapeout Precheck -> Gate-Level Test -> Viewer
+# RTL Simulation -> Tiny Tapeout GDS -> Precheck -> Gate-Level Test -> Viewer
 # =====================================================================
 
 name: RTL to GDSII & Verification Pipeline
@@ -11,15 +10,16 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   MA_DE: B06
-  DESIGN_NAME: b06_hamming74_encoder
-  CONFIG: config.json
 
 jobs:
   mo-phong:
     name: 1 - RTL Simulation (Icarus Verilog)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout repository
@@ -31,11 +31,14 @@ jobs:
           sudo apt-get install -y iverilog
 
       - name: Record tool versions
+        shell: bash
         run: |
+          set -euo pipefail
           iverilog -V 2>&1 | head -1 | tee tool_versions.txt
           echo "Run time: $(date -Is)" | tee -a tool_versions.txt
 
       - name: Compile and run RTL testbench
+        shell: bash
         run: |
           set -euo pipefail
           iverilog -g2012 -o sim.vvp \
@@ -45,16 +48,20 @@ jobs:
           vvp sim.vvp | tee simulation.log
 
       - name: Verify RTL simulation result
+        shell: bash
         run: |
           set -euo pipefail
+
           if grep -qiE 'FATAL|mismatch|FAIL' simulation.log; then
             echo "::error::RTL simulation reported a failure."
             exit 1
           fi
+
           if ! grep -qi 'PASS' simulation.log; then
             echo "::error::No PASS marker found in simulation.log."
             exit 1
           fi
+
           echo "RTL simulation passed."
 
       - name: Upload RTL simulation logs
@@ -68,350 +75,55 @@ jobs:
             *.vcd
           if-no-files-found: warn
 
-  rtl2gds:
-    name: 2 - RTL-to-GDSII (LibreLane + Sky130A)
-    runs-on: ubuntu-latest
+  gds:
+    name: 2 - Build GDS with Tiny Tapeout
+    runs-on: ubuntu-24.04
     needs: mo-phong
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Install Nix with FOSSi binary cache
-        uses: cachix/install-nix-action@v27
         with:
-          extra_nix_config: |
-            extra-substituters = https://nix-cache.fossi-foundation.org
-            extra-trusted-public-keys = nix-cache.fossi-foundation.org:3+K59iFwXqKsL7BNu6Guy0v+uTlwsxYQxjspXzqLYQs=
-            extra-experimental-features = nix-command flakes
+          submodules: recursive
 
-    
-     
-      - name: Checkout LibreLane
-        shell: bash
-        run: |
-          set -euo pipefail
-          git clone --depth 1 \
-            https://github.com/librelane/librelane \
-            "$HOME/librelane"
-          test -d "$HOME/librelane"
-          git -C "$HOME/librelane" rev-parse HEAD
-
-          
-      - name: Verify LibreLane checkout
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -d "$HOME/librelane/.git"
-          echo "=== LibreLane commit ==="
-          git -C "$HOME/librelane" log -1 --oneline
-          echo "=== LibreLane version ==="
-          cd "$HOME/librelane"
-          nix-shell --run "librelane --version"
-
-
-      - name: Run LibreLane
-        run: |
-          set -euo pipefail
-          cd "$HOME/librelane"
-          nix-shell --run \
-            "cd '$GITHUB_WORKSPACE' && librelane --version && librelane '$CONFIG'"
-      - name: Record LibreLane version and pin layers
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "=== LibreLane version ==="
-          cd "$HOME/librelane"
-          git rev-parse HEAD
-          cd "$GITHUB_WORKSPACE"
-
-          echo "=== LEF pin layers ==="
-          LEF="$(find "$GITHUB_WORKSPACE" "$HOME/artifacts" \
-            -type f \
-            -path '*/final/lef/tt_um_eee703128_24100688.lef' \
-            -print -quit 2>/dev/null || true)"
-
-          if [ -n "$LEF" ]; then
-            grep -n -E 'LAYER met[1-5]|PIN VGND|PIN VDPWR|SIZE ' "$LEF" \
-              | head -100
-          else
-            echo "LEF not found"
-          fi
-      - name: Verify and normalize physical-design outputs
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          GDS="$(find "$GITHUB_WORKSPACE" "$HOME/artifacts" \
-            -type f \
-            -path '*/final/gds/tt_um_eee703128_24100688.gds' \
-            -print -quit 2>/dev/null || true)"
-
-          if [ -z "$GDS" ]; then
-            echo "::error::Final GDS was not found."
-            exit 1
-          fi
-
-          RUN_ROOT="${GDS%/final/gds/*}"
-          FINAL_DIR="$RUN_ROOT/final"
-
-          PNL="$FINAL_DIR/pnl/tt_um_eee703128_24100688.pnl.v"
-          LEF="$FINAL_DIR/lef/tt_um_eee703128_24100688.lef"
-          METRICS="$FINAL_DIR/metrics.json"
-
-          for f in "$PNL" "$LEF" "$METRICS"; do
-            if [ ! -s "$f" ]; then
-              echo "::error::Required output missing: $f"
-              exit 1
-            fi
-          done
-
-          echo "Found GDS: $GDS"
-          echo "Found netlist: $PNL"
-          echo "Found LEF: $LEF"
-          echo "Found metrics: $METRICS"
-
-          python3 .github/doc_metrics.py "$METRICS"
-
-          mkdir -p flow_artifacts/final/gds
-          mkdir -p flow_artifacts/final/pnl
-          mkdir -p flow_artifacts/final/lef
-          mkdir -p flow_artifacts/final
-
-          cp "$GDS" \
-            flow_artifacts/final/gds/tt_um_eee703128_24100688.gds
-          cp "$PNL" \
-            flow_artifacts/final/pnl/tt_um_eee703128_24100688.pnl.v
-          cp "$LEF" \
-            flow_artifacts/final/lef/tt_um_eee703128_24100688.lef
-          cp "$METRICS" flow_artifacts/final/metrics.json
-
-          find "$RUN_ROOT" -type f -name '*.log' -exec \
-            cp --parents '{}' flow_artifacts/ \; || true
-
-          echo "Physical-design outputs prepared."
-
-      - name: Upload normalized physical-design outputs
-        uses: actions/upload-artifact@v4
+      - name: Build GDS
+        uses: TinyTapeout/tt-gds-action@ttsky25b
         with:
-          name: rtl2gds-${{ env.MA_DE }}
-          path: flow_artifacts/
-          if-no-files-found: error
-
-  package_gds:
-    name: Package Tiny Tapeout submission
-    needs: rtl2gds
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download physical-design outputs
-        uses: actions/download-artifact@v4
-        with:
-          name: rtl2gds-${{ env.MA_DE }}
-          path: output_gds
-
-      - name: Install KLayout
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y klayout
-          klayout -v
-
-      - name: Prepare submission and convert GDS to OASIS
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          GDS="$(find output_gds -type f \
-            -path '*/final/gds/tt_um_eee703128_24100688.gds' \
-            -print -quit)"
-          PNL="$(find output_gds -type f \
-            -path '*/final/pnl/tt_um_eee703128_24100688.pnl.v' \
-            -print -quit)"
-          LEF="$(find output_gds -type f \
-            -path '*/final/lef/tt_um_eee703128_24100688.lef' \
-            -print -quit)"
-
-          for f in "$GDS" "$PNL" "$LEF"; do
-            if [ -z "$f" ] || [ ! -s "$f" ]; then
-              echo "::error::Missing GDS, gate-level netlist, or LEF."
-              find output_gds -type f -print
-              exit 1
-            fi
-          done
-
-          mkdir -p tt_submission
-
-          cp "$GDS" tt_submission/tt_um_eee703128_24100688.gds
-          cp "$PNL" tt_submission/tt_um_eee703128_24100688.v
-          cp "$LEF" tt_submission/tt_um_eee703128_24100688.lef
-
-          # PDK metadata consumed by the official Tiny Tapeout actions.
-          cat > tt_submission/pdk.json <<'JSON'
-          {
-            "PDK": "sky130A",
-            "PDK_SOURCE": "open_pdks",
-            "PDK_VERSION": "0536d02d875c8f67dd7cca3902ac457e62f20005"
-          }
-          JSON
-
-          # Minimal project metadata for this submission.
-          cat > tt_submission/info.yaml <<'YAML'
-          project:
-            top_module: tt_um_eee703128_24100688
-            tiles: "1x1"
-            analog_pins: 0
-          pinout: {}
-          YAML
-
-          cat > /tmp/gds_to_oas.rb <<'RUBY'
-          input = ENV.fetch("INPUT_GDS")
-          output = ENV.fetch("OUTPUT_OAS")
-
-          layout = RBA::Layout.new
-          layout.read(input)
-          layout.write(output)
-
-          puts "Cells: #{layout.cells.size}"
-          puts "OASIS created: #{output}"
-          RUBY
-
-          export INPUT_GDS="$GITHUB_WORKSPACE/tt_submission/tt_um_eee703128_24100688.gds"
-          export OUTPUT_OAS="$GITHUB_WORKSPACE/tt_submission/tt_um_eee703128_24100688.oas"
-
-          klayout -b -r /tmp/gds_to_oas.rb
-          test -s "$OUTPUT_OAS"
-
-          echo "Submission files:"
-          ls -lh tt_submission/
-
-      - name: Render PNG preview from actual GDS
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cat > /tmp/render_gds.rb <<'RUBY'
-          gds = ENV.fetch("INPUT_GDS")
-          png = ENV.fetch("OUTPUT_PNG")
-
-          layout = RBA::Layout.new
-          layout.read(gds)
-
-          view = RBA::LayoutView.new
-          view.load_layout(gds, 0)
-          view.max_hier
-          view.zoom_fit
-          view.save_image(png, 1200, 900)
-
-          puts "Rendered #{png}; cells=#{layout.cells.size}"
-          RUBY
-
-          export INPUT_GDS="$GITHUB_WORKSPACE/tt_submission/tt_um_eee703128_24100688.gds"
-          export OUTPUT_PNG="$GITHUB_WORKSPACE/gds_render.png"
-
-          klayout -b -r /tmp/render_gds.rb
-          test -s gds_render.png
-          file gds_render.png
-
-      - name: Preserve submission directory and upload
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p artifact_bundle/tt_submission
-          cp tt_submission/* artifact_bundle/tt_submission/
-          find artifact_bundle -maxdepth 3 -type f -print
-
-      - name: Upload Tiny Tapeout submission
-        uses: actions/upload-artifact@v4
-        with:
-          name: tt_submission
-          path: artifact_bundle/**
-          if-no-files-found: error
-
-
-      - name: Upload rendered layout image
-        uses: actions/upload-artifact@v4
-        with:
-          name: gds_render
-          path: gds_render.png
-          if-no-files-found: error
+          pdk: sky130A
 
   precheck:
     name: 3 - Official Tiny Tapeout Precheck
-    needs: package_gds
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    needs: gds
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Run official Tiny Tapeout precheck
         uses: TinyTapeout/tt-gds-action/precheck@ttsky25b
 
-  
   gl_test:
     name: 4 - Gate-Level Simulation
-    needs: package_gds
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    needs: gds
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Download Tiny Tapeout submission
-        uses: actions/download-artifact@v4
         with:
-          name: tt_submission
-          path: .
+          submodules: recursive
 
-      
-      - name: Verify test setup
-        shell: bash
-        run: |
-          set -euo pipefail
-          ls -la
-          find . -maxdepth 4 -type f -print | sort
-
-          test -f test/Makefile
-          test -f test/tb.v
-          test -f test/test.py
-
-          NETLIST="$(find . -type f \
-            -name 'tt_um_eee703128_24100688.v' \
-            -print -quit)"
-
-          if [ -z "$NETLIST" ] || [ ! -s "$NETLIST" ]; then
-            echo "::error::Gate-level netlist was not found."
-            exit 1
-          fi
-
-          cp "$NETLIST" test/gate_level_netlist.v
-          test -s test/gate_level_netlist.v
-
-
-      - name: Install Cocotb and Icarus Verilog
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y iverilog
-          python3 -m pip install --user 'cocotb<2'
-
-      - name: Run gate-level simulation
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd test
-          make clean
-          GATES=yes make
-
+      - name: Run official gate-level test
+        uses: TinyTapeout/tt-gds-action/gl_test@ttsky25b
 
   viewer:
     name: 5 - Official Tiny Tapeout 3D Viewer
     if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
     needs: [precheck, gl_test]
-    runs-on: ubuntu-latest
 
     permissions:
       contents: read
@@ -421,6 +133,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Deploy official Tiny Tapeout viewer
         uses: TinyTapeout/tt-gds-action/viewer@ttsky25b
