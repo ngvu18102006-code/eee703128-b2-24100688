@@ -30,9 +30,41 @@ env:
   # -----------------------------------------------------------------
 
 jobs:
+  precheck:
+    name: 0 - Precheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Kiem tra cac file bat buoc
+        run: |
+          set -eu
+          test -f config.json
+          test -f src/project.v
+          test -f test/tb.v
+          test -f test/b06_reference.sv
+          test -f .github/doc_metrics.py
+
+          python3 - <<'PY'
+          import json
+
+          with open("config.json", encoding="utf-8") as f:
+              config = json.load(f)
+
+          expected = "tt_um_eee703128_24100688"
+          actual = config.get("DESIGN_NAME")
+
+          if actual != expected:
+              raise SystemExit(
+                  f"DESIGN_NAME sai: {actual!r}; mong doi {expected!r}"
+              )
+
+          print("PRECHECK PASS")
+          PY
   mo-phong:
     name: 1 - Mo phong RTL (Icarus Verilog)
     runs-on: ubuntu-latest
+    needs: precheck
     steps:
       - uses: actions/checkout@v4
 
@@ -78,6 +110,8 @@ jobs:
             *.vcd
           if-no-files-found: warn
 
+
+
   rtl2gds:
     name: 2 - RTL-to-GDSII (LibreLane + sky130A)
     runs-on: ubuntu-latest
@@ -86,7 +120,6 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Cai Nix kem bo nho dem nhi phan cua FOSSi
-        # Khong co bo nho dem nay thi Nix se TU BIEN DICH OpenROAD - rat lau.
         uses: cachix/install-nix-action@v27
         with:
           extra_nix_config: |
@@ -104,24 +137,35 @@ jobs:
 
       - name: Kiem SAN PHAM, khong chi kiem ma thoat
         run: |
-          # Ma thoat 0 chi noi "tien trinh ket thuc binh thuong". No KHONG
-          # noi "da ra san pham". Phai kiem san pham that.
-          GDS=$(find . -name "*.gds" | head -1)
-          MJ=$(find . -name "metrics.json" | head -1)
-          if [ -z "$GDS" ]; then echo "::error::Khong sinh duoc file GDS"; exit 1; fi
-          if [ -z "$MJ" ];  then echo "::error::Khong co metrics.json";   exit 1; fi
+          set -eu
+          GDS=$(find . -type f -name "*.gds" -print -quit)
+          MJ=$(find . -type f -name "metrics.json" -print -quit)
+
+          if [ -z "$GDS" ]; then
+            echo "::error::Khong sinh duoc file GDS"
+            exit 1
+          fi
+
+          if [ -z "$MJ" ]; then
+            echo "::error::Khong co metrics.json"
+            exit 1
+          fi
+
           echo "GDS: $GDS"
           echo "--- Chi so chinh, chep vao bao cao ---"
           python3 .github/doc_metrics.py "$MJ"
 
-      - uses: actions/upload-artifact@v4
-        # Tai len CA KHI FLOW HONG - nhat ky loi cung la bang chung hop le.
+      - name: Luu artifact RTL-to-GDSII
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: rtl2gds-${{ env.MA_DE }}
           path: |
             **/runs/**/final/**
             **/runs/**/*.log
-            **/metrics.json
+            **/runs/**/*.json
+            **/runs/**/*.v
+            **/runs/**/*.lef
+            **/runs/**/*.gds
             **/*.gds
           if-no-files-found: warn
