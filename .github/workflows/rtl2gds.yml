@@ -48,7 +48,10 @@ jobs:
 
       - name: Bien dich va chay testbench
         run: |
-          iverilog -g2012 -o sim.vvp src/project.v test/b06_reference.sv test/tb.v
+          iverilog -g2012 -s b06_tb -o sim.vvp \
+            src/project.v \
+            test/b06_reference.sv \
+            test/tb.v
           vvp sim.vvp | tee simulation.log
 
       - name: Kiem log - phai co PASS va khong duoc co loi
