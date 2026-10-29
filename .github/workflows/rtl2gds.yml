@@ -25,7 +25,7 @@ on:
 env:
   # ---- SUA BA DONG NAY CHO KHOP DE CUA MINH -----------------------
   MA_DE: B06
-  DESIGN_NAME: b06_hamming74_encoder
+  DESIGN_NAME: tt_um_eee703128_24100688
   CONFIG: config.json
   # -----------------------------------------------------------------
 
@@ -48,7 +48,7 @@ jobs:
 
       - name: Bien dich va chay testbench
         run: |
-          iverilog -g2012 -o sim.vvp rtl/*.sv tb/*.sv
+          iverilog -g2012 -o sim.vvp src/project.v test/b06_reference.sv test/tb.v
           vvp sim.vvp | tee simulation.log
 
       - name: Kiem log - phai co PASS va khong duoc co loi
